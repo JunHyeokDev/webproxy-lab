@@ -16,14 +16,17 @@ void serve_static(int fd, char *filename, int filesize, char *method);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
 void divide_hostname_and_path(const char* url, char *hostname, char *path, char *port);
+void *thread(void *vargp);
+
+
 
 int main(int argc, char **argv)
 {
-    int listenfd, connfd;
+    int listenfd, *connfdp;
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
     char hostname[MAXLINE], port[MAXLINE];
-
+    pthread_t tid;
 
     /* Check command line args */
     if (argc != 2)
@@ -36,13 +39,13 @@ int main(int argc, char **argv)
     while (1)
     {
         clientlen = sizeof(clientaddr);
-        connfd = Accept(listenfd, (SA *)&clientaddr, // sockaddr == SA
+        connfdp = malloc(sizeof(int));
+        *connfdp = Accept(listenfd, (SA *)&clientaddr, // sockaddr == SA
                         &clientlen);                 // line:netp:tiny:accept
         Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE,
                     0);
         printf("Accepted connection from (%s, %s)\n", hostname, port);
-        do_Proxy(connfd);  // line:netp:tiny:doit
-        Close(connfd); // line:netp:tiny:close
+        Pthread_create(&tid, NULL, thread, connfdp);
     }
     return 0;
 }
@@ -60,7 +63,6 @@ void do_Proxy(int fd) {
     char filename[MAXLINE];
     char port[MAXLINE];
 
-
     rio_t rio, response_rio;
 
     /* Read request Line and headers */
@@ -68,7 +70,7 @@ void do_Proxy(int fd) {
     Rio_readlineb(&rio, buf, MAXLINE); // 읽어오기
     printf("Request headers:\n");
     printf("%s\n", buf);
-    // curl --proxy http://localhost:7777 --output home.html http://localhost:8000/home.html
+
     sscanf(buf, "%s %s %s", method, uri, version);
 
     divide_hostname_and_path(uri,hostname,path, port);
@@ -96,8 +98,8 @@ void do_Proxy(int fd) {
     
     printf("%s",buf_for_server);
 
-    serverfd = Open_clientfd(hostname, port);                                           
-    Rio_writen(serverfd, buf_for_server, strlen(buf_for_server));               
+    serverfd = Open_clientfd(hostname, port);
+    Rio_writen(serverfd, buf_for_server, strlen(buf_for_server));
 
     ssize_t bsize;
     Rio_readinitb(&response_rio, serverfd);
@@ -207,4 +209,13 @@ void divide_hostname_and_path(const char* url, char *hostname, char *path, char 
     if (port[0] == '\0') {
         strcpy(port, "5004");
     }
+}
+
+void *thread(void *vargp) {
+    int connfd = *((int *)vargp);
+    Pthread_detach(pthread_self());
+    Free(vargp);
+    do_Proxy(connfd);  // line:netp:tiny:doit
+    Close(connfd);
+    return NULL;
 }
